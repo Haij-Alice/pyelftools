@@ -1263,9 +1263,7 @@ class ReadElf:
             else:
                 self._emitline(f'CU: {cu_filename}:')
 
-            self._emitline('File name                            Line number    Starting address    Stmt')
-            # GNU readelf has a View column that we don't try to replicate
-            # The autotest has logic in place to ignore that
+            self._emitline('File name                            Line number    Starting address    View    Stmt')
 
             # Print each state's file, line and address information. For some
             # instructions other output is needed to be compatible with
@@ -1296,8 +1294,9 @@ class ReadElf:
                         else self._format_hex(state.address)
                     )
                     stmt = 'x' if state.is_stmt and not state.end_sequence else ''
+                    view = f'{state.view:d}' if state.view else ''
                     self._emitline(
-                        f"{filename:<35}  {line:>11}  {address:>18}    {stmt}"
+                        f"{filename:<35}  {line:>11}  {address:>18}  {view:>6}    {stmt}"
                     )
                 else:
                     # In readelf, on non-VLIW machines there is no op_index postfix after address.
@@ -1318,8 +1317,9 @@ class ReadElf:
                         else f'[{state.op_index:d}]'
                     )
                     stmt = 'x' if state.is_stmt and not state.end_sequence else ''
+                    view = f'{state.view:d}' if state.view else ''
                     self._emitline(
-                        f"{filename:<35}  {line}  {address:>18}{op_index} {stmt}"
+                        f"{filename:<35}  {line}  {address:>18}{op_index}  {view:>6}    {stmt}"
                     )
                 if entry.command == DW_LNS_copy:
                     # Another readelf oddity...

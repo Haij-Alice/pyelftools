@@ -119,6 +119,62 @@ class TestLineProgram(unittest.TestCase):
         self.assertLineState(linetable[0].state, discriminator=0x05)
         self.assertLineState(linetable[1].state, discriminator=0x00, end_sequence=True)
 
+    def test_views(self):
+        """ Views disambiguate several rows at the same address.
+
+            The numbering follows GNU readelf/objdump: a row keeps the view
+            counter of its address, the counter is bumped after the row is
+            emitted, and it is reset whenever the address advances (with the
+            exception of DW_LNS_fixed_advance_pc, which does not reset it).
+        """
+        def set_address(addr):
+            return b'\x00\x09\x02' + addr.to_bytes(4, 'little')
+
+        s = BytesIO(
+            set_address(0x0) +
+            b'\x01' +            # DW_LNS.copy            -> 0x0, view 0
+            b'\x01' +            # DW_LNS.copy            -> 0x0, view 1
+            set_address(0x1) +   # set Address resets the view
+            b'\x01' +            # DW_LNS.copy            -> 0x1, view 0
+            b'\x02\x00' +        # DW_LNS.advance_pc 0    -> no reset
+            b'\x01' +            # DW_LNS.copy            -> 0x1, view 1
+            b'\x02\x01' +        # DW_LNS.advance_pc 1    -> reset
+            b'\x01' +            # DW_LNS.copy            -> 0x2, view 0
+            b'\x09\x01\x00' +    # DW_LNS.fixed_advance_pc 1 -> no reset
+            b'\x01' +            # DW_LNS.copy            -> 0x3, view 1
+            b'\x0a' +            # special opcode, +0 PC   -> 0x3, view 2
+            b'\x19' +            # special opcode, +1 PC   -> 0x4, view 0
+            b'\x01' +            # DW_LNS.copy            -> 0x4, view 1
+            b'\x08' +            # DW_LNS.const_add_pc     -> reset
+            b'\x01' +            # DW_LNS.copy            -> 0x14, view 0
+            set_address(0x100) +
+            b'\x00\x01\x01')     # DW_LNE.end_sequence    -> 0x100, view 0
+
+        lp = self._make_program_in_stream(s)
+        rows = [e.state for e in lp.get_entries() if e.state is not None]
+
+        self.assertEqual(
+            [state.view for state in rows],
+            [0, 1, 0, 1, 0, 1, 2, 0, 1, 0, 0])
+        self.assertEqual(
+            [(state.address, state.view) for state in rows],
+            [(0x0, 0), (0x0, 1), (0x1, 0), (0x1, 1), (0x2, 0), (0x3, 1),
+             (0x3, 2), (0x4, 0), (0x4, 1), (0x14, 0), (0x100, 0)])
+
+    def test_view_of_first_row_is_zero(self):
+        """ The first row of a sequence always opens view 0.
+        """
+        s = BytesIO(
+            b'\x00\x09\x02' + (0x10).to_bytes(4, 'little') +
+            b'\x01' +            # DW_LNS.copy -> 0x10, view 0
+            b'\x00\x01\x01')     # DW_LNE.end_sequence
+
+        lp = self._make_program_in_stream(s)
+        rows = [e.state for e in lp.get_entries() if e.state is not None]
+
+        self.assertEqual([state.view for state in rows], [0, 0])
+        self.assertTrue(rows[1].end_sequence)
+
 
 if __name__ == '__main__':
     unittest.main()

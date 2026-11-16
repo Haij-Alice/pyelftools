@@ -70,6 +70,7 @@ class LineState:
         self.epilogue_begin = False
         self.isa = 0
         self.discriminator = 0
+        self.view = 0
 
     def __repr__(self) -> str:
         return '\n'.join((
@@ -77,9 +78,9 @@ class LineState:
             f'  address = 0x{self.address:x}',
             *(
                 f'  {attr} = {getattr(self, attr)}'
-                for attr in ('file', 'line', 'column', 'is_stmt', 'basic_block',
-                    'end_sequence', 'prologue_end', 'epilogue_begin', 'isa',
-                    'discriminator')
+                for attr in ('view', 'file', 'line', 'column', 'is_stmt',
+                    'basic_block', 'end_sequence', 'prologue_end',
+                    'epilogue_begin', 'isa', 'discriminator')
             ),
             '>',
         ))
@@ -151,6 +152,10 @@ class LineProgram:
             # After adding, clear some state registers.
             entries.append(LineProgramEntry(
                 cmd, is_extended, args, copy.copy(state)))
+            # Each row emitted for the same address opens a new "view" of
+            # that address (see binutils' view numbering); subsequent rows
+            # with an unchanged address get a higher view number.
+            state.view += 1
             state.discriminator = 0
             state.basic_block = False
             state.prologue_end = False
@@ -183,6 +188,9 @@ class LineProgram:
                           maximum_operations_per_instruction))
                 state.address += address_addend
                 state.op_index = (state.op_index + operation_advance) % maximum_operations_per_instruction
+                if address_addend:
+                    # An address change starts a new series of views.
+                    state.view = 0
                 line_addend: int = self['line_base'] + (adjusted_opcode % self['line_range'])
                 state.line += line_addend
                 add_entry_new_state(
@@ -198,6 +206,9 @@ class LineProgram:
                 if ex_opcode == DW_LNE.end_sequence:
                     state.end_sequence = True
                     state.is_stmt = 0
+                    # The row that ends a sequence is not part of any view:
+                    # GNU readelf/objdump always show view 0 for it.
+                    state.view = 0
                     add_entry_new_state(ex_opcode, [], is_extended=True)
                     # reset state
                     state = LineState(self.header['default_is_stmt'])
@@ -205,6 +216,7 @@ class LineProgram:
                     operand: int = struct_parse(self.structs.the_Dwarf_target_addr,
                                            self.stream)
                     state.address = operand
+                    state.view = 0
                     add_entry_old_state(ex_opcode, [operand], is_extended=True)
                 elif ex_opcode == DW_LNE.define_file:
                     operand = struct_parse(
@@ -231,6 +243,8 @@ class LineProgram:
                     address_addend = (
                         operand * self.header['minimum_instruction_length'])
                     state.address += address_addend
+                    if address_addend:
+                        state.view = 0
                     add_entry_old_state(opcode, [address_addend])
                 elif opcode == DW_LNS.advance_line:
                     operand = struct_parse(self.structs.the_Dwarf_sleb128,
@@ -257,11 +271,15 @@ class LineProgram:
                     address_addend = ((adjusted_opcode // self['line_range']) *
                                       self['minimum_instruction_length'])
                     state.address += address_addend
+                    if address_addend:
+                        state.view = 0
                     add_entry_old_state(opcode, [address_addend])
                 elif opcode == DW_LNS.fixed_advance_pc:
                     operand = struct_parse(self.structs.the_Dwarf_uint16,
                                            self.stream)
                     state.address += operand
+                    # DW_LNS_fixed_advance_pc does not reset the view counter
+                    # (this matches GNU readelf/objdump).
                     add_entry_old_state(opcode, [operand])
                 elif opcode == DW_LNS.set_prologue_end:
                     state.prologue_end = True
